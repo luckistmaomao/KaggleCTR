@@ -1,4 +1,6 @@
 data/
 output/
 test/
+ensemble_data/
+test.py
 *pyc

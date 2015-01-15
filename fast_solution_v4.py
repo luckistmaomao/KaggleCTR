@@ -18,8 +18,8 @@ as the name is changed.
 from datetime import datetime
 from csv import DictReader
 from math import exp, log, sqrt
-import time
 import os
+import time
 
 
 # TL; DR, the main training process starts on line: 250,
@@ -34,21 +34,6 @@ import os
 train = 'data/train.csv'               # path to training file
 test = 'data/test.csv'                 # path to testing file
 
-# B, model
-alpha = .1  # learning rate
-beta = 1.   # smoothing parameter for adaptive learning rate
-L1 = 1.     # L1 regularization, larger value means more regularized
-L2 = 1.     # L2 regularization, larger value means more regularized
-
-# C, feature/hash trick
-D = 2 ** 26             # number of weights to use
-interaction = False     # whether to enable poly2 feature interactions
-combine = True
-
-# D, training/validation
-epoch = 1       # learn training data for N passes
-holdafter = None # data after date N (exclusive) are used as validation
-holdout = 100 # use every N training instance for holdout validation
 
 
 ##############################################################################
@@ -218,12 +203,8 @@ def data(path, D):
     apps = ['app_id','app_domain','app_category']
     sites = ['site_id','site_category','site_domain']
     devices = ['device_id','device_model','device_type','device_conn_type']
-    unknowns = ['C1','C14','C15','C16','C17','C18',
-                'C19','C20','C21']
-    selected = ['site_id','app_id','banner_pos','device_ip','device_id']
 
-    source = ['banner_pos']
-    target = apps + sites
+    domains = [apps,sites,devices]
 
     for t, row in enumerate(DictReader(open(path))):
         # process id
@@ -236,40 +217,6 @@ def data(path, D):
             if row['click'] == '1':
                 y = 1.
             del row['click']
-
-        ###simply double some good features
-        for key in selected:
-            row[key + '_'] = row[key]
-
-        ###combine unknown parameters
-#        n_unknowns = len(unknowns)
-#        for i in range(n_unknowns-1):
-#            for j in range(i+1, n_unknowns):
-#                ikey = unknowns[i]
-#                jkey = unknowns[j]
-#                row[ikey+jkey] = row[ikey] + '_' + row[jkey]
-
-        ###combine app features
-        n_appfeatures = len(apps)
-        for i in range(n_appfeatures-1):
-            for j in range(i+1,n_appfeatures):
-                ikey = apps[i]
-                jkey = apps[j]
-                row[ikey+jkey] = row[ikey] + '_' + row[jkey]
-
-        ###combine site features
-#        n_sitefeatures = len(sites)
-#        for i in range(n_sitefeatures-1):
-#            for j in range(i+1,n_sitefeatures):
-#                ikey = apps[i]
-#                jkey = apps[j]
-#                row[ikey+jkey] = row[ikey] + '_' + row[jkey]
-
-        ###combine banner_pos with app and site features
-        for i in source:
-            for j in target:
-                row[i+j] = row[i] + '_' + row[j]
-
 
         # extract date
         date = int(row['hour'][4:6])
@@ -289,7 +236,27 @@ def data(path, D):
         yield t, date, ID, x, y
 
 
-def mydata(path, D, feature_name):
+def data(path, D):
+    ''' GENERATOR: Apply hash-trick to the original csv row
+                   and for simplicity, we one-hot-encode everything
+
+        INPUT:
+            path: path to training or testing file
+            D: the max index that we can hash to
+
+        YIELDS:
+            ID: id of the instance, mainly useless
+            x: a list of hashed and one-hot-encoded 'indices'
+               we only need the index since all values are either 0 or 1
+            y: y = 1 if we have a click, else we have y = 0
+    '''
+
+    apps = ['app_id','app_domain','app_category']
+    sites = ['site_id','site_category','site_domain']
+    devices = ['device_id','device_model','device_type','device_conn_type']
+
+    domains = [apps,sites,devices]
+
     for t, row in enumerate(DictReader(open(path))):
         # process id
         ID = row['id']
@@ -301,9 +268,6 @@ def mydata(path, D, feature_name):
             if row['click'] == '1':
                 y = 1.
             del row['click']
-
-        # double feature
-        row[feature_name + '_'] = row[feature_name]
 
         # extract date
         date = int(row['hour'][4:6])
@@ -322,11 +286,63 @@ def mydata(path, D, feature_name):
 
         yield t, date, ID, x, y
 
-##############################################################################
-# start training #############################################################
-##############################################################################
+
+def mydata(path, D, rkey):
+    for t, row in enumerate(DictReader(open(path))):
+        # process id
+        ID = row['id']
+        del row['id']
+
+        #test
+        del row[rkey]
+        #test
+
+        # process clicks
+        y = 0.
+        if 'click' in row:
+            if row['click'] == '1':
+                y = 1.
+            del row['click']
+
+        # extract date
+        date = int(row['hour'][4:6])
+
+        # turn hour really into hour, it was originally YYMMDDHH
+        row['hour'] = row['hour'][6:]
+
+        # build x
+        x = []
+        for key in row:
+            value = row[key]
+
+            # one-hot encode everything with hash trick
+            index = abs(hash(key + '_' + value)) % D
+            x.append(index)
+
+        yield t, date, ID, x, y
 
 def run():
+    outputs = os.listdir('output')
+    submission = 'output/submission%s.csv' % (len(outputs)+1,) # path of to be outputted submission file
+    # B, model
+    alpha = .1  # learning rate
+    beta = 1.   # smoothing parameter for adaptive learning rate
+    L1 = 1.     # L1 regularization, larger value means more regularized
+    L2 = 1.     # L2 regularization, larger value means more regularized
+
+    # C, feature/hash trick
+    D = 2 ** 25             # number of weights to use
+    interaction = False     # whether to enable poly2 feature interactions
+
+    # D, training/validation
+    epoch = 1       # learn training data for N passes
+    holdafter = 29   # data after date N (exclusive) are used as validation
+    holdout = None  # use every N training instance for holdout validation
+
+    ##############################################################################
+    # start training #############################################################
+    ##############################################################################
+    print time.ctime()
 
     start = datetime.now()
 
@@ -346,7 +362,6 @@ def run():
             #    y: label (click)
 
             # step 1, get prediction from learner
-
             p = learner.predict(x)
 
             if (holdafter and date > holdafter) or (holdout and t % holdout == 0):
@@ -364,17 +379,18 @@ def run():
                 # step 2-2, update learner with label (click) information
                 learner.update(x, p, y)
 
-        if holdafter or holdout:
-            print('Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
-                e, loss/count, str(datetime.now() - start)))
+        printinfo = 'Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
+            e, loss/count, str(datetime.now() - start))
+        with open('output/log','a+') as f:
+            f.write(printinfo)
+
+        print('Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
+            e, loss/count, str(datetime.now() - start)))
 
 
     ##############################################################################
     # start testing, and build Kaggle's submission file ##########################
     ##############################################################################
-
-    outputs = os.listdir('output/')
-    submission = 'output/submisson%s.csv' % (len(outputs),)
 
     with open(submission, 'w') as outfile:
         outfile.write('id,click\n')
@@ -382,8 +398,31 @@ def run():
             p = learner.predict(x)
             outfile.write('%s,%s\n' % (ID, str(p)))
 
+    print time.ctime()
 
-def test_one_feature(feature_name):
+def remove(key):
+    outputs = os.listdir('output')
+    submission = 'output/submission%s.csv' % (len(outputs)+1,) # path of to be outputted submission file
+    # B, model
+    alpha = .1  # learning rate
+    beta = 1.   # smoothing parameter for adaptive learning rate
+    L1 = 1.     # L1 regularization, larger value means more regularized
+    L2 = 1.     # L2 regularization, larger value means more regularized
+
+    # C, feature/hash trick
+    D = 2 ** 25             # number of weights to use
+    interaction = False     # whether to enable poly2 feature interactions
+
+    # D, training/validation
+    epoch = 1       # learn training data for N passes
+    holdafter = 29   # data after date N (exclusive) are used as validation
+    holdout = None  # use every N training instance for holdout validation
+
+    ##############################################################################
+    # start training #############################################################
+    ##############################################################################
+    print time.ctime()
+
     start = datetime.now()
 
     # initialize ourselves a learner
@@ -394,7 +433,7 @@ def test_one_feature(feature_name):
         loss = 0.
         count = 0
 
-        for t, date, ID, x, y in mydata(train, D, feature_name):  # data is a generator
+        for t, date, ID, x, y in mydata(train, D, key):  # data is a generator
             #    t: just a instance counter
             # date: you know what this is
             #   ID: id provided in original data
@@ -419,106 +458,37 @@ def test_one_feature(feature_name):
                 # step 2-2, update learner with label (click) information
                 learner.update(x, p, y)
 
-        if holdafter or holdout:
-            if not os.path.exists('test/'):
-                os.mkdir('test')
+        printinfo = 'Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
+            e, loss/count, str(datetime.now() - start))
+        with open('output/log','a+') as f:
+            f.write(printinfo)
 
-            printinfo = 'Epoch %d finished, validation logloss: %f, elapsed time: %s, feature_name: %s' % (e, loss/count, str(datetime.now() - start), feature_name)
-            with open('test/test.log','a+') as f:
-                f.write(printinfo + '\n')
-            print('Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
-                e, loss/count, str(datetime.now() - start)))
+        print('Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
+            e, loss/count, str(datetime.now() - start)))
 
 
     ##############################################################################
     # start testing, and build Kaggle's submission file ##########################
     ##############################################################################
 
-    outputs = os.listdir('output/')
-    submission = 'output/submisson_test%s.csv' % (len(outputs),)
-
     with open(submission, 'w') as outfile:
         outfile.write('id,click\n')
-        for t, date, ID, x, y in mydata(test, D, feature_name):
+        for t, date, ID, x, y in data(test, D):
             p = learner.predict(x)
             outfile.write('%s,%s\n' % (ID, str(p)))
 
+    print time.ctime()
 
-def test_features():
-    with open('data/train.csv') as f:
-        line = f.readline().strip()
-        keys = line.split(',')
+def main():
+    with open(train) as f:
+        line = f.readline()
+        line = line.strip()
         other_keys = ['id','hour','click']
-        keys = [key for key in keys if key not in other_keys]
+        keys = line.split(',')
+        keys = list(set(keys)-set(other_keys))
+        print keys
         for key in keys:
-            test_one_feature(key)
-
-def test_parameter(alpha,L1,L2):
-    print alpha,L1,L2
-    start = datetime.now()
-
-    # initialize ourselves a learner
-    learner = ftrl_proximal(alpha, beta, L1, L2, D, interaction)
-
-    # start training
-    for e in xrange(epoch):
-        loss = 0.
-        count = 0
-
-        for t, date, ID, x, y in data(train, D):  # data is a generator
-            #    t: just a instance counter
-            # date: you know what this is
-            #   ID: id provided in original data
-            #    x: features
-            #    y: label (click)
-
-            # step 1, get prediction from learner
-
-            p = learner.predict(x)
-
-            if (holdafter and date > holdafter) or (holdout and t % holdout == 0):
-                # step 2-1, calculate validation loss
-                #           we do not train with the validation data so that our
-                #           validation loss is an accurate estimation
-                #
-                # holdafter: train instances from day 1 to day N
-                #            validate with instances from day N + 1 and after
-                #
-                # holdout: validate with every N instance, train with others
-                loss += logloss(p, y)
-                count += 1
-            else:
-                # step 2-2, update learner with label (click) information
-                learner.update(x, p, y)
-
-        if holdafter or holdout:
-            print('Epoch %d finished, validation logloss: %f, elapsed time: %s' % (
-                e, loss/count, str(datetime.now() - start)))
-
-
-    ##############################################################################
-    # start testing, and build Kaggle's submission file ##########################
-    ##############################################################################
-
-    submission = 'output/submisson_%s_%s_%s.csv' % (alpha,L1,L2)
-
-    with open(submission, 'w') as outfile:
-        outfile.write('id,click\n')
-        for t, date, ID, x, y in data(test, D):
-            p = learner.predict(x)
-            outfile.write('%s,%s\n' % (ID, str(p)))
-
-def test_some_parameters():
-    alphas = [0.04,0.03]
-    l2s = [0.8,0.9,1.0,1.1,1.2,1.3]
-    l1 = 1.
-
-    for alpha in alphas:
-        for l2 in l2s:
-            test_parameter(alpha,L1,L2)
-
+            remove(key)
 
 if __name__ == "__main__":
-    print 'program starts',time.ctime()
-    test_some_parameters()
-    print 'program ends',time.ctime()
+    run()
